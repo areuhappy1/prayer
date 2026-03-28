@@ -8,6 +8,9 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
     const nativeOnly = [
       'react-native-view-shot',
       'react-native-purchases',
+      'expo-media-library',
+      'expo-sharing',
+      'expo-speech',
     ];
     if (nativeOnly.includes(moduleName)) {
       return {
