@@ -12,11 +12,12 @@ import {
   Alert,
   Share,
 } from 'react-native';
-import ViewShot, { captureRef } from 'react-native-view-shot';
+import { Platform } from 'react-native';
+import * as Linking from 'expo-linking';
 import * as Speech from 'expo-speech';
 import * as Sharing from 'expo-sharing';
 import * as MediaLibrary from 'expo-media-library';
-import * as Linking from 'expo-linking';
+import ViewShot, { captureRef } from 'react-native-view-shot';
 import { THEME } from '../constants/theme';
 import { callAnthropicProxy, extractAnthropicText } from '../services/api';
 import {
@@ -57,7 +58,7 @@ const PRAYER_TONES = [
 
 const MISSION_PERCENT = 30;
 const TERMS_URL =
-  process.env.EXPO_PUBLIC_TERMS_URL || 'https://example.com/terms';
+  (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_TERMS_URL) || 'https://example.com/terms';
 
 function parsePrayerJson(raw: string): PrayerGenerationJson | null {
   const trimmed = raw.trim();
@@ -87,13 +88,15 @@ export default function PrayerScreen() {
   const [history, setHistory] = useState<PrayerHistoryItem[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [speaking, setSpeaking] = useState(false);
-  const cardShotRef = useRef<ViewShot | null>(null);
-  const captureCard = () =>
-    captureRef(cardShotRef, {
+  const cardShotRef = useRef<any>(null);
+  const captureCard = () => {
+    if (Platform.OS === 'web' || !captureRef) return Promise.resolve('');
+    return captureRef(cardShotRef, {
       format: 'png',
       quality: 0.92,
       result: 'tmpfile',
     });
+  };
 
   useEffect(() => {
     (async () => {
@@ -208,7 +211,11 @@ export default function PrayerScreen() {
   };
 
   const stopTts = () => {
-    Speech.stop();
+    if (Platform.OS === 'web') {
+      window.speechSynthesis?.cancel();
+    } else if (Speech) {
+      Speech.stop();
+    }
     setSpeaking(false);
   };
 
@@ -222,14 +229,32 @@ export default function PrayerScreen() {
     const text = [verseReference && `말씀: ${verseReference}`, verseQuote, prayerBody]
       .filter(Boolean)
       .join('\n\n');
-    Speech.speak(text, {
-      language: 'ko-KR',
-      pitch: 1,
-      rate: 0.92,
-      onDone: () => setSpeaking(false),
-      onStopped: () => setSpeaking(false),
-      onError: () => setSpeaking(false),
-    });
+
+    if (Platform.OS === 'web') {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'ko-KR';
+      utterance.rate = 0.92;
+      utterance.onend = () => setSpeaking(false);
+      utterance.onerror = () => setSpeaking(false);
+      window.speechSynthesis.speak(utterance);
+    } else if (Speech) {
+      Speech.speak(text, {
+        language: 'ko-KR',
+        pitch: 1,
+        rate: 0.92,
+        onDone: () => setSpeaking(false),
+        onStopped: () => setSpeaking(false),
+        onError: () => setSpeaking(false),
+      });
+    }
+  };
+
+  const webAlert = (title: string, msg: string) => {
+    if (Platform.OS === 'web') {
+      window.alert(`${title}\n${msg}`);
+    } else {
+      Alert.alert(title, msg);
+    }
   };
 
   const shareText = async () => {
@@ -237,13 +262,24 @@ export default function PrayerScreen() {
       .filter(Boolean)
       .join('\n');
     try {
-      await Share.share({ message: text, title: '나의 기도문' });
+      if (Platform.OS === 'web' && navigator.share) {
+        await navigator.share({ text, title: '나의 기도문' });
+      } else if (Platform.OS === 'web') {
+        await navigator.clipboard.writeText(text);
+        window.alert('클립보드에 복사되었습니다.');
+      } else {
+        await Share.share({ message: text, title: '나의 기도문' });
+      }
     } catch {
-      Alert.alert('공유', '공유를 완료할 수 없습니다.');
+      webAlert('공유', '공유를 완료할 수 없습니다.');
     }
   };
 
   const saveCardImage = async () => {
+    if (Platform.OS === 'web') {
+      webAlert('안내', '웹에서는 이미지 저장이 지원되지 않습니다. 텍스트 공유를 이용해주세요.');
+      return;
+    }
     try {
       const perm = await MediaLibrary.requestPermissionsAsync();
       if (!perm.granted) {
@@ -259,6 +295,10 @@ export default function PrayerScreen() {
   };
 
   const shareImage = async () => {
+    if (Platform.OS === 'web') {
+      await shareText();
+      return;
+    }
     try {
       const uri = await captureCard();
       const can = await Sharing.isAvailableAsync();
@@ -402,7 +442,7 @@ export default function PrayerScreen() {
 
         {step === 'result' && (
           <View style={styles.section}>
-            <ViewShot ref={cardShotRef} style={styles.shotWrap}>
+            <View ref={Platform.OS !== 'web' ? cardShotRef : undefined} style={styles.shotWrap}>
               <View style={styles.resultCard}>
                 <Text style={styles.resultTitle}>✨ 나만의 기도문</Text>
                 {loading ? (
@@ -425,7 +465,7 @@ export default function PrayerScreen() {
                   </>
                 )}
               </View>
-            </ViewShot>
+            </View>
 
             {!loading && (
               <View style={styles.resultActions}>
