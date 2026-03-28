@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -9,22 +9,28 @@ import {
   SafeAreaView,
   ActivityIndicator,
   Modal,
+  Alert,
+  Share,
 } from 'react-native';
-
-const THEME = {
-  bg: '#0A0C14',
-  card: '#111420',
-  cardBorder: '#1E2438',
-  gold: '#C9A96E',
-  goldLight: '#E8C98A',
-  goldDim: '#8B6B3D',
-  text: '#EEE8DC',
-  textMuted: '#7A7F96',
-  textSub: '#AAA5B8',
-  accent: '#3B4A7A',
-  purple: '#6B5BCD',
-  green: '#4A9B6F',
-};
+import ViewShot, { captureRef } from 'react-native-view-shot';
+import * as Speech from 'expo-speech';
+import * as Sharing from 'expo-sharing';
+import * as MediaLibrary from 'expo-media-library';
+import * as Linking from 'expo-linking';
+import { THEME } from '../constants/theme';
+import { callAnthropicProxy, extractAnthropicText } from '../services/api';
+import {
+  getFreePrayerUsed,
+  setFreePrayerUsed,
+  getPrayerHistoryJson,
+  setPrayerHistoryJson,
+} from '../services/storage';
+import {
+  hasActiveSubscription,
+  purchaseSubscription,
+  restorePurchases,
+} from '../services/purchases';
+import type { PrayerHistoryItem, PrayerGenerationJson } from '../types/prayer';
 
 const MOODS = [
   { id: 'anxiety', label: '불안', emoji: '😰' },
@@ -49,8 +55,23 @@ const PRAYER_TONES = [
   { id: 'modern', label: '현대적 / 친근한', desc: '주님, 제 마음이 오늘...' },
 ];
 
-const FREE_USES = 1;
 const MISSION_PERCENT = 30;
+const TERMS_URL =
+  process.env.EXPO_PUBLIC_TERMS_URL || 'https://example.com/terms';
+
+function parsePrayerJson(raw: string): PrayerGenerationJson | null {
+  const trimmed = raw.trim();
+  const start = trimmed.indexOf('{');
+  const end = trimmed.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) return null;
+  try {
+    const parsed = JSON.parse(trimmed.slice(start, end + 1)) as PrayerGenerationJson;
+    if (parsed.prayer) return parsed;
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 export default function PrayerScreen() {
   const [step, setStep] = useState<'category' | 'input' | 'result' | 'paywall'>('category');
@@ -58,11 +79,41 @@ export default function PrayerScreen() {
   const [situation, setSituation] = useState('');
   const [target, setTarget] = useState('me');
   const [tone, setTone] = useState('modern');
-  const [prayer, setPrayer] = useState('');
+  const [verseReference, setVerseReference] = useState('');
+  const [verseQuote, setVerseQuote] = useState('');
+  const [prayerBody, setPrayerBody] = useState('');
   const [loading, setLoading] = useState(false);
   const [usedFree, setUsedFree] = useState(false);
-  const [history, setHistory] = useState<any[]>([]);
+  const [history, setHistory] = useState<PrayerHistoryItem[]>([]);
   const [showHistory, setShowHistory] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
+  const cardShotRef = useRef<ViewShot | null>(null);
+  const captureCard = () =>
+    captureRef(cardShotRef, {
+      format: 'png',
+      quality: 0.92,
+      result: 'tmpfile',
+    });
+
+  useEffect(() => {
+    (async () => {
+      const u = await getFreePrayerUsed();
+      setUsedFree(u);
+      const h = await getPrayerHistoryJson();
+      if (h) {
+        try {
+          setHistory(JSON.parse(h) as PrayerHistoryItem[]);
+        } catch {
+          setHistory([]);
+        }
+      }
+    })();
+  }, []);
+
+  const persistHistory = useCallback(async (items: PrayerHistoryItem[]) => {
+    setHistory(items);
+    await setPrayerHistoryJson(JSON.stringify(items));
+  }, []);
 
   const toggleMood = (id: string) => {
     setSelectedMoods(prev =>
@@ -71,71 +122,171 @@ export default function PrayerScreen() {
   };
 
   const generatePrayer = async () => {
-    if (usedFree) {
+    const sub = await hasActiveSubscription();
+    if (usedFree && !sub) {
       setStep('paywall');
       return;
     }
+
     setLoading(true);
     setStep('result');
+    setVerseReference('');
+    setVerseQuote('');
+    setPrayerBody('');
 
     const targetLabel = PRAYER_TARGETS.find(t => t.id === target)?.label || '';
-    const moodLabels = MOODS.filter(m => selectedMoods.includes(m.id)).map(m => m.label).join(', ');
-    const toneDesc = tone === 'traditional' ? '전통적이고 격식 있는 경어체' : '현대적이고 친근한 구어체';
+    const moodLabels = MOODS.filter(m => selectedMoods.includes(m.id))
+      .map(m => m.label)
+      .join(', ');
+    const toneDesc =
+      tone === 'traditional' ? '전통적이고 격식 있는 경어체' : '현대적이고 친근한 구어체';
     const hour = new Date().getHours();
-    const timeContext = hour < 12 ? '아침' : hour < 18 ? '낮' : '저녁/밤';
+    const timeContext =
+      hour < 12 ? '아침(하루의 용기·새 출발)' : hour < 18 ? '낮(일과 중간의 집중)' : '저녁·밤(평안한 안식·감사)';
 
-    try {
-      const response = await fetch('https://www.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 1000,
-          messages: [{
-            role: 'user',
-            content: `크리스천 앱을 위한 개인화된 기도문을 작성해 주세요.
+    const prompt = `크리스천 앱을 위한 개인화된 기도문을 작성해 주세요.
 
 조건:
 - 기도 대상: ${targetLabel}
 - 기도자의 현재 감정/상태: ${moodLabels || '전반적인 기도'}
 - 구체적 상황: ${situation || '특별히 기재하지 않음'}
 - 문체: ${toneDesc}
-- 시간대: ${timeContext} 기도
-- 구조: 찬양/감사 → 고백 → 간구 → 예수님의 이름으로 마침
+- 시간대: ${timeContext}
+
+구조: 찬양/감사 → 고백 → 간구 → 예수님의 이름으로 마침
 
 요구사항:
-1. 관련 성경 구절 하나를 기도문 안에 자연스럽게 녹여주세요
-2. 300-400자 분량의 진심어린 기도문을 작성해 주세요
-3. 기도문 마지막에 "예수님의 이름으로 기도드립니다. 아멘." 으로 마쳐주세요
-4. 기도문 앞에 별도 설명 없이 기도문만 출력해 주세요`,
-          }],
-        }),
+1. 입력과 가장 잘 맞는 성경 구절 하나를 골라 verseReference(한글 역본 약칭)와 verseQuote(핵심 1~2문장)로 적어 주세요.
+2. prayer 필드에 전체 기도문만 넣고, 300~500자 내외로 진심 어린 기도를 작성하세요.
+3. 기도문 마지막은 "예수님의 이름으로 기도드립니다. 아멘." 으로 마쳐 주세요.
+
+반드시 아래 JSON만 출력하세요. 다른 설명·마크다운·코드펜스 없이 JSON만:
+{"verseReference":"...","verseQuote":"...","prayer":"..."}`;
+
+    try {
+      const data = await callAnthropicProxy({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1200,
+        messages: [{ role: 'user', content: prompt }],
       });
+      const raw = extractAnthropicText(data);
+      const parsed = parsePrayerJson(raw);
+      if (parsed) {
+        setVerseReference(parsed.verseReference);
+        setVerseQuote(parsed.verseQuote);
+        setPrayerBody(parsed.prayer);
+      } else {
+        setPrayerBody(raw || '기도문을 가져오지 못했습니다.');
+      }
 
-      const data = await response.json();
-      const text = data.content?.map((c: any) => c.text || '').join('') || '';
-      setPrayer(text);
-      setUsedFree(true);
+      if (!usedFree) {
+        await setFreePrayerUsed(true);
+        setUsedFree(true);
+      }
 
-      setHistory(prev => [{
+      const item: PrayerHistoryItem = {
+        id: `${Date.now()}`,
         date: new Date().toLocaleDateString('ko-KR'),
         target: targetLabel,
         moods: moodLabels,
-        text,
+        verseReference: parsed?.verseReference || '',
+        verseQuote: parsed?.verseQuote || '',
+        prayer: parsed?.prayer || raw,
         answered: false,
-      }, ...prev]);
-    } catch {
-      setPrayer('기도문 생성에 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
+      };
+      setHistory(prev => {
+        const next = [item, ...prev];
+        void setPrayerHistoryJson(JSON.stringify(next));
+        return next;
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : '오류';
+      setPrayerBody(`기도문 생성 오류: ${msg}`);
     } finally {
       setLoading(false);
     }
   };
 
+  const stopTts = () => {
+    Speech.stop();
+    setSpeaking(false);
+  };
+
+  const playTts = () => {
+    if (!prayerBody.trim()) return;
+    if (speaking) {
+      stopTts();
+      return;
+    }
+    setSpeaking(true);
+    const text = [verseReference && `말씀: ${verseReference}`, verseQuote, prayerBody]
+      .filter(Boolean)
+      .join('\n\n');
+    Speech.speak(text, {
+      language: 'ko-KR',
+      pitch: 1,
+      rate: 0.92,
+      onDone: () => setSpeaking(false),
+      onStopped: () => setSpeaking(false),
+      onError: () => setSpeaking(false),
+    });
+  };
+
+  const shareText = async () => {
+    const text = [verseReference && `📖 ${verseReference}`, verseQuote && `「${verseQuote}」`, '', prayerBody]
+      .filter(Boolean)
+      .join('\n');
+    try {
+      await Share.share({ message: text, title: '나의 기도문' });
+    } catch {
+      Alert.alert('공유', '공유를 완료할 수 없습니다.');
+    }
+  };
+
+  const saveCardImage = async () => {
+    try {
+      const perm = await MediaLibrary.requestPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('권한', '사진 저장을 위해 권한이 필요합니다.');
+        return;
+      }
+      const uri = await captureCard();
+      await MediaLibrary.saveToLibraryAsync(uri);
+      Alert.alert('저장됨', '사진 보관함에 기도 카드가 저장되었습니다.');
+    } catch {
+      Alert.alert('저장', '이미지 저장에 실패했습니다.');
+    }
+  };
+
+  const shareImage = async () => {
+    try {
+      const uri = await captureCard();
+      const can = await Sharing.isAvailableAsync();
+      if (can) {
+        await Sharing.shareAsync(uri, { mimeType: 'image/png', dialogTitle: '기도문 카드' });
+      } else {
+        Alert.alert('공유', '이 기기에서는 이미지 공유를 지원하지 않습니다.');
+      }
+    } catch {
+      Alert.alert('공유', '이미지 공유에 실패했습니다.');
+    }
+  };
+
   const reset = () => {
+    stopTts();
     setStep('category');
     setSelectedMoods([]);
     setSituation('');
-    setPrayer('');
+    setVerseReference('');
+    setVerseQuote('');
+    setPrayerBody('');
+  };
+
+  const toggleAnswered = (id: string) => {
+    const next = history.map(h =>
+      h.id === id ? { ...h, answered: !h.answered } : h
+    );
+    void persistHistory(next);
   };
 
   return (
@@ -150,7 +301,6 @@ export default function PrayerScreen() {
 
         {step === 'category' && (
           <>
-            {/* Mood Selection */}
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>오늘 나의 상태</Text>
               <Text style={styles.sectionSub}>중복 선택 가능합니다</Text>
@@ -165,10 +315,12 @@ export default function PrayerScreen() {
                     onPress={() => toggleMood(mood.id)}
                   >
                     <Text style={styles.moodEmoji}>{mood.emoji}</Text>
-                    <Text style={[
-                      styles.moodLabel,
-                      selectedMoods.includes(mood.id) && styles.moodLabelActive,
-                    ]}>
+                    <Text
+                      style={[
+                        styles.moodLabel,
+                        selectedMoods.includes(mood.id) && styles.moodLabelActive,
+                      ]}
+                    >
                       {mood.label}
                     </Text>
                   </TouchableOpacity>
@@ -176,7 +328,6 @@ export default function PrayerScreen() {
               </View>
             </View>
 
-            {/* Target */}
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>기도 대상</Text>
               <View style={styles.targetRow}>
@@ -187,7 +338,12 @@ export default function PrayerScreen() {
                     onPress={() => setTarget(t.id)}
                   >
                     <Text style={styles.targetEmoji}>{t.emoji}</Text>
-                    <Text style={[styles.targetLabel, target === t.id && styles.targetLabelActive]}>
+                    <Text
+                      style={[
+                        styles.targetLabel,
+                        target === t.id && styles.targetLabelActive,
+                      ]}
+                    >
                       {t.label}
                     </Text>
                   </TouchableOpacity>
@@ -195,7 +351,6 @@ export default function PrayerScreen() {
               </View>
             </View>
 
-            {/* Tone */}
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>기도의 톤</Text>
               {PRAYER_TONES.map(t => (
@@ -217,9 +372,10 @@ export default function PrayerScreen() {
               ))}
             </View>
 
-            {/* Situation */}
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>구체적 상황 <Text style={styles.optionalText}>(선택)</Text></Text>
+              <Text style={styles.sectionTitle}>
+                구체적 상황 <Text style={styles.optionalText}>(선택)</Text>
+              </Text>
               <TextInput
                 style={styles.textInput}
                 multiline
@@ -232,7 +388,6 @@ export default function PrayerScreen() {
               />
             </View>
 
-            {/* Free badge */}
             {!usedFree && (
               <View style={styles.freeBadge}>
                 <Text style={styles.freeBadgeText}>✨ 첫 1회 무료 기도문 생성</Text>
@@ -247,34 +402,53 @@ export default function PrayerScreen() {
 
         {step === 'result' && (
           <View style={styles.section}>
-            <View style={styles.resultCard}>
-              <Text style={styles.resultTitle}>✨ 나만의 기도문</Text>
-              {loading ? (
-                <View style={styles.loadingArea}>
-                  <ActivityIndicator color={THEME.gold} size="large" />
-                  <Text style={styles.loadingText}>기도문을 작성하고 있습니다...</Text>
-                  <Text style={styles.loadingSubText}>잠시 묵상하며 기다려 주세요 🕊️</Text>
-                </View>
-              ) : (
-                <>
-                  <Text style={styles.prayerText}>{prayer}</Text>
-                  <View style={styles.resultActions}>
-                    <TouchableOpacity style={styles.actionBtn}>
-                      <Text style={styles.actionBtnText}>🔖 저장</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.actionBtn}>
-                      <Text style={styles.actionBtnText}>📤 공유</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.actionBtn}>
-                      <Text style={styles.actionBtnText}>🔊 듣기</Text>
-                    </TouchableOpacity>
+            <ViewShot ref={cardShotRef} style={styles.shotWrap}>
+              <View style={styles.resultCard}>
+                <Text style={styles.resultTitle}>✨ 나만의 기도문</Text>
+                {loading ? (
+                  <View style={styles.loadingArea}>
+                    <ActivityIndicator color={THEME.gold} size="large" />
+                    <Text style={styles.loadingText}>기도문을 작성하고 있습니다...</Text>
+                    <Text style={styles.loadingSubText}>잠시 묵상하며 기다려 주세요 🕊️</Text>
                   </View>
-                  <TouchableOpacity style={styles.resetBtn} onPress={reset}>
-                    <Text style={styles.resetBtnText}>← 새 기도문 작성하기</Text>
-                  </TouchableOpacity>
-                </>
-              )}
-            </View>
+                ) : (
+                  <>
+                    {verseReference ? (
+                      <View style={styles.verseBox}>
+                        <Text style={styles.verseRef}>📖 {verseReference}</Text>
+                        {verseQuote ? (
+                          <Text style={styles.verseQuoteText}>「{verseQuote}」</Text>
+                        ) : null}
+                      </View>
+                    ) : null}
+                    <Text style={styles.prayerText}>{prayerBody}</Text>
+                  </>
+                )}
+              </View>
+            </ViewShot>
+
+            {!loading && (
+              <View style={styles.resultActions}>
+                <TouchableOpacity style={styles.actionBtn} onPress={saveCardImage}>
+                  <Text style={styles.actionBtnText}>🔖 저장</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.actionBtn} onPress={shareImage}>
+                  <Text style={styles.actionBtnText}>🖼 공유</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.actionBtn} onPress={shareText}>
+                  <Text style={styles.actionBtnText}>📤 텍스트</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.actionBtn} onPress={playTts}>
+                  <Text style={styles.actionBtnText}>{speaking ? '⏹ 멈춤' : '🔊 듣기'}</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {!loading && (
+              <TouchableOpacity style={styles.resetBtn} onPress={reset}>
+                <Text style={styles.resetBtnText}>← 새 기도문 작성하기</Text>
+              </TouchableOpacity>
+            )}
           </View>
         )}
 
@@ -288,7 +462,6 @@ export default function PrayerScreen() {
                 구독을 시작하시면 매일 새로운 기도문을 받으실 수 있습니다.
               </Text>
 
-              {/* Mission Statement */}
               <View style={styles.missionBox}>
                 <Text style={styles.missionTitle}>💛 헌금의 뜻</Text>
                 <Text style={styles.missionText}>
@@ -298,12 +471,42 @@ export default function PrayerScreen() {
                 </Text>
               </View>
 
-              <TouchableOpacity style={styles.subscribeBtn}>
+              <TouchableOpacity
+                style={styles.subscribeBtn}
+                onPress={async () => {
+                  const ok = await purchaseSubscription();
+                  if (ok) {
+                    setStep('category');
+                    Alert.alert('감사합니다', '구독이 활성화되었습니다.');
+                  } else {
+                    Alert.alert(
+                      '안내',
+                      '스토어 결제를 완료할 수 없습니다. RevenueCat 키·상품 설정을 확인하세요.'
+                    );
+                  }
+                }}
+              >
                 <Text style={styles.subscribeBtnText}>월 4,900원으로 시작하기</Text>
-                <Text style={styles.subscribeBtnSub}>언제든 해지 가능 · 첫 주 무료</Text>
+                <Text style={styles.subscribeBtnSub}>언제든 해지 가능 · 스토어 약관 적용</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity onPress={reset}>
+              <TouchableOpacity
+                onPress={async () => {
+                  const ok = await restorePurchases();
+                  Alert.alert(
+                    ok ? '복원 완료' : '복원 실패',
+                    ok ? '구독이 확인되었습니다.' : '활성 구독을 찾지 못했습니다.'
+                  );
+                }}
+              >
+                <Text style={styles.restoreText}>구매 복원</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity onPress={() => Linking.openURL(TERMS_URL)}>
+                <Text style={styles.linkText}>이용약관 · 개인정보처리방침</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity onPress={() => setStep('category')}>
                 <Text style={styles.skipText}>나중에 구독하기</Text>
               </TouchableOpacity>
             </View>
@@ -313,7 +516,6 @@ export default function PrayerScreen() {
         <View style={{ height: 30 }} />
       </ScrollView>
 
-      {/* History Modal */}
       <Modal visible={showHistory} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -330,25 +532,26 @@ export default function PrayerScreen() {
                   <Text style={styles.emptySubText}>첫 기도문을 작성해보세요 🙏</Text>
                 </View>
               ) : (
-                history.map((item, i) => (
-                  <View key={i} style={styles.historyItem}>
+                history.map(item => (
+                  <View key={item.id} style={styles.historyItem}>
                     <View style={styles.historyMeta}>
                       <Text style={styles.historyDate}>{item.date}</Text>
                       <Text style={styles.historyTarget}>{item.target}</Text>
-                      {item.answered && (
+                      {item.answered ? (
                         <Text style={styles.answeredBadge}>✅ 응답됨</Text>
-                      )}
+                      ) : null}
                     </View>
+                    {item.verseReference ? (
+                      <Text style={styles.historyVerse} numberOfLines={1}>
+                        📖 {item.verseReference}
+                      </Text>
+                    ) : null}
                     <Text style={styles.historyPreview} numberOfLines={3}>
-                      {item.text}
+                      {item.prayer}
                     </Text>
                     <TouchableOpacity
                       style={styles.answeredBtn}
-                      onPress={() => {
-                        setHistory(prev =>
-                          prev.map((h, j) => j === i ? { ...h, answered: !h.answered } : h)
-                        );
-                      }}
+                      onPress={() => toggleAnswered(item.id)}
                     >
                       <Text style={styles.answeredBtnText}>
                         {item.answered ? '✅ 응답 취소' : '🙌 기도 응답됨!'}
@@ -481,6 +684,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   generateBtnText: { color: '#0A0C14', fontSize: 16, fontWeight: '700' },
+  shotWrap: { borderRadius: 20, overflow: 'hidden' },
   resultCard: {
     backgroundColor: THEME.card,
     borderRadius: 20,
@@ -488,16 +692,26 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.cardBorder,
   },
+  verseBox: {
+    marginBottom: 14,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: THEME.cardBorder,
+  },
+  verseRef: { fontSize: 13, fontWeight: '700', color: THEME.gold, marginBottom: 6 },
+  verseQuoteText: { fontSize: 13, color: THEME.textSub, lineHeight: 20, fontStyle: 'italic' },
   resultTitle: { fontSize: 16, fontWeight: '700', color: THEME.gold, marginBottom: 16 },
   prayerText: { color: THEME.text, fontSize: 15, lineHeight: 28, fontStyle: 'italic' },
   resultActions: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 10,
-    marginTop: 20,
+    marginTop: 16,
     marginBottom: 12,
   },
   actionBtn: {
-    flex: 1,
+    flexGrow: 1,
+    minWidth: '22%',
     paddingVertical: 10,
     backgroundColor: 'rgba(201, 169, 110, 0.08)',
     borderRadius: 10,
@@ -505,7 +719,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.cardBorder,
   },
-  actionBtnText: { color: THEME.textSub, fontSize: 13 },
+  actionBtnText: { color: THEME.textSub, fontSize: 12 },
   resetBtn: {
     paddingVertical: 12,
     alignItems: 'center',
@@ -551,10 +765,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 32,
     alignItems: 'center',
     width: '100%',
-    marginBottom: 12,
+    marginBottom: 8,
   },
   subscribeBtnText: { color: '#0A0C14', fontSize: 16, fontWeight: '700' },
   subscribeBtnSub: { color: 'rgba(10,12,20,0.6)', fontSize: 11, marginTop: 4 },
+  restoreText: { color: THEME.gold, fontSize: 13, paddingVertical: 8 },
+  linkText: { color: THEME.textMuted, fontSize: 12, textDecorationLine: 'underline', marginBottom: 4 },
   skipText: { color: THEME.textMuted, fontSize: 13, paddingVertical: 8 },
   modalOverlay: {
     flex: 1,
@@ -587,7 +803,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.cardBorder,
   },
-  historyMeta: { flexDirection: 'row', gap: 8, marginBottom: 8, alignItems: 'center' },
+  historyMeta: { flexDirection: 'row', gap: 8, marginBottom: 8, alignItems: 'center', flexWrap: 'wrap' },
   historyDate: { fontSize: 11, color: THEME.textMuted },
   historyTarget: {
     fontSize: 11,
@@ -597,6 +813,7 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     borderRadius: 6,
   },
+  historyVerse: { fontSize: 12, color: THEME.gold, marginBottom: 6 },
   answeredBadge: { fontSize: 11, color: THEME.green },
   historyPreview: { color: THEME.textSub, fontSize: 13, lineHeight: 20, marginBottom: 10 },
   answeredBtn: {

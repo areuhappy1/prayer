@@ -1,0 +1,17 @@
+export const THEME = {
+  bg: '#0A0C14',
+  card: '#111420',
+  cardBorder: '#1E2438',
+  gold: '#C9A96E',
+  goldLight: '#E8C98A',
+  goldDim: '#8B6B3D',
+  text: '#EEE8DC',
+  textMuted: '#7A7F96',
+  textSub: '#AAA5B8',
+  accent: '#3B4A7A',
+  purple: '#6B5BCD',
+  green: '#4A9B6F',
+  rose: '#C0647A',
+  tabBarBg: '#0F1117',
+  tabBarBorder: '#1E2235',
+} as const;

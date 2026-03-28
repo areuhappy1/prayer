@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -8,23 +8,9 @@ import {
   StyleSheet,
   SafeAreaView,
   ActivityIndicator,
-  Animated,
 } from 'react-native';
-
-const THEME = {
-  bg: '#0A0C14',
-  card: '#111420',
-  cardBorder: '#1E2438',
-  gold: '#C9A96E',
-  goldLight: '#E8C98A',
-  goldDim: '#8B6B3D',
-  text: '#EEE8DC',
-  textMuted: '#7A7F96',
-  textSub: '#AAA5B8',
-  accent: '#3B4A7A',
-  accentLight: '#4D5F9E',
-  purple: '#6B5BCD',
-};
+import { THEME } from '../constants/theme';
+import { callAnthropicProxy, extractAnthropicText } from '../services/api';
 
 const DAILY_VERSES = [
   {
@@ -45,34 +31,87 @@ const DAILY_VERSES = [
     theme: '인도',
     emoji: '🌿',
   },
+  {
+    reference: '로마서 8:28',
+    text: '우리가 알거니와 하나님을 사랑하는 자 곧 그의 뜻대로 부르심을 입은 자들에게는 모든 것이 합력하여 선을 이루느니라',
+    theme: '섭리',
+    emoji: '✨',
+  },
+  {
+    reference: '마태복음 11:28',
+    text: '수고하고 무거운 짐 진 자들은 다 내게로 오라 내가 너희를 쉬게 하리라',
+    theme: '안식',
+    emoji: '☁️',
+  },
+  {
+    reference: '시편 46:1',
+    text: '하나님은 우리의 피난처시요 힘이시니 환난 중에 만날 큰 도움 이시로다',
+    theme: '피난',
+    emoji: '🛡️',
+  },
+  {
+    reference: '고린도후서 12:9',
+    text: '내 은혜가 네게 족하도다 이는 내 능력이 약한 데서 온전하여짐이라',
+    theme: '은혜',
+    emoji: '💛',
+  },
 ];
 
-const todayVerse = DAILY_VERSES[new Date().getDay() % DAILY_VERSES.length];
+const MOOD_CHIPS = [
+  { id: 'anxiety', label: '불안' },
+  { id: 'thanks', label: '감사' },
+  { id: 'petition', label: '간구' },
+  { id: 'repentance', label: '회개' },
+  { id: 'peace', label: '평안' },
+];
+
+function hashDateYmd(d: Date): number {
+  const s = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
 
 export default function BibleScreen() {
+  const todayVerse = useMemo(() => {
+    const idx = hashDateYmd(new Date()) % DAILY_VERSES.length;
+    return DAILY_VERSES[idx];
+  }, []);
+
+  const [moodIds, setMoodIds] = useState<string[]>([]);
   const [situation, setSituation] = useState('');
   const [interpretation, setInterpretation] = useState('');
   const [loading, setLoading] = useState(false);
   const [step, setStep] = useState<'verse' | 'input' | 'result'>('verse');
+
+  const toggleMood = (id: string) => {
+    setMoodIds(prev =>
+      prev.includes(id) ? prev.filter(m => m !== id) : [...prev, id]
+    );
+  };
+
+  const moodLabels = useMemo(
+    () =>
+      MOOD_CHIPS.filter(m => moodIds.includes(m.id))
+        .map(m => m.label)
+        .join(', '),
+    [moodIds]
+  );
 
   const getInterpretation = async () => {
     if (!situation.trim()) return;
     setLoading(true);
     setStep('result');
 
+    const moodLine = moodLabels
+      ? `오늘의 기분/무드: ${moodLabels}`
+      : '특별히 고른 무드 없음';
+
     try {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 1000,
-          messages: [
-            {
-              role: 'user',
-              content: `오늘의 성경 말씀: "${todayVerse.reference}" - "${todayVerse.text}"
-              
+      const prompt = `오늘의 성경 말씀: "${todayVerse.reference}" - "${todayVerse.text}"
+
 사용자의 현재 상황: "${situation}"
+${moodLine}
 
 위 성경 말씀을 사용자의 현재 상황에 맞게 따뜻하고 영적으로 깊이 있게 해석해 주세요.
 형식:
@@ -80,17 +119,18 @@ export default function BibleScreen() {
 2. 오늘 당신의 상황에 주시는 하나님의 메시지 (3-4문장)
 3. 오늘 하루를 위한 한 줄 묵상
 
-한국어로, 따뜻하고 위로가 되는 목사님의 설교 톤으로 작성해주세요.`,
-            },
-          ],
-        }),
-      });
+한국어로, 따뜻하고 위로가 되는 목사님의 설교 톤으로 작성해주세요.`;
 
-      const data = await response.json();
-      const text = data.content?.map((c: any) => c.text || '').join('') || '';
-      setInterpretation(text);
-    } catch (e) {
-      setInterpretation('말씀 해석을 불러오는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
+      const data = await callAnthropicProxy({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1200,
+        messages: [{ role: 'user', content: prompt }],
+      });
+      setInterpretation(extractAnthropicText(data));
+    } catch {
+      setInterpretation(
+        '말씀 해석을 불러오는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.'
+      );
     } finally {
       setLoading(false);
     }
@@ -99,17 +139,18 @@ export default function BibleScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-        {/* Header */}
         <View style={styles.header}>
           <Text style={styles.headerDate}>
             {new Date().toLocaleDateString('ko-KR', {
-              year: 'numeric', month: 'long', day: 'numeric', weekday: 'long',
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric',
+              weekday: 'long',
             })}
           </Text>
           <Text style={styles.headerTitle}>오늘의 말씀</Text>
         </View>
 
-        {/* Verse Card */}
         <View style={styles.verseCard}>
           <View style={styles.verseThemeRow}>
             <Text style={styles.verseEmoji}>{todayVerse.emoji}</Text>
@@ -123,11 +164,31 @@ export default function BibleScreen() {
           </View>
         </View>
 
-        {/* My Situation Input */}
         {step === 'verse' && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>나의 상황에 맞게 해석받기</Text>
-            <Text style={styles.sectionSub}>오늘 당신의 마음과 상황을 나눠주세요</Text>
+            <Text style={styles.sectionSub}>오늘의 무드(선택)와 상황을 나눠주세요</Text>
+            <View style={styles.moodRow}>
+              {MOOD_CHIPS.map(m => (
+                <TouchableOpacity
+                  key={m.id}
+                  style={[
+                    styles.moodChip,
+                    moodIds.includes(m.id) && styles.moodChipActive,
+                  ]}
+                  onPress={() => toggleMood(m.id)}
+                >
+                  <Text
+                    style={[
+                      styles.moodChipText,
+                      moodIds.includes(m.id) && styles.moodChipTextActive,
+                    ]}
+                  >
+                    {m.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
             <TouchableOpacity style={styles.inputButton} onPress={() => setStep('input')}>
               <Text style={styles.inputButtonText}>✍️ 나의 상황 입력하기</Text>
             </TouchableOpacity>
@@ -137,6 +198,27 @@ export default function BibleScreen() {
         {step === 'input' && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>오늘 나의 상황</Text>
+            <View style={styles.moodRow}>
+              {MOOD_CHIPS.map(m => (
+                <TouchableOpacity
+                  key={m.id}
+                  style={[
+                    styles.moodChip,
+                    moodIds.includes(m.id) && styles.moodChipActive,
+                  ]}
+                  onPress={() => toggleMood(m.id)}
+                >
+                  <Text
+                    style={[
+                      styles.moodChipText,
+                      moodIds.includes(m.id) && styles.moodChipTextActive,
+                    ]}
+                  >
+                    {m.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
             <TextInput
               style={styles.textInput}
               multiline
@@ -172,7 +254,10 @@ export default function BibleScreen() {
               ) : (
                 <>
                   <View style={styles.situationTag}>
-                    <Text style={styles.situationTagText}>나의 상황: {situation}</Text>
+                    <Text style={styles.situationTagText}>
+                      나의 상황: {situation}
+                      {moodLabels ? `\n무드: ${moodLabels}` : ''}
+                    </Text>
                   </View>
                   <Text style={styles.interpretationText}>{interpretation}</Text>
                   <TouchableOpacity
@@ -277,8 +362,28 @@ const styles = StyleSheet.create({
   sectionSub: {
     fontSize: 13,
     color: THEME.textMuted,
-    marginBottom: 16,
+    marginBottom: 12,
   },
+  moodRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 14,
+  },
+  moodChip: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: THEME.cardBorder,
+    backgroundColor: THEME.card,
+  },
+  moodChipActive: {
+    borderColor: THEME.gold,
+    backgroundColor: 'rgba(201, 169, 110, 0.12)',
+  },
+  moodChipText: { fontSize: 12, color: THEME.textMuted, fontWeight: '500' },
+  moodChipTextActive: { color: THEME.gold },
   inputButton: {
     borderWidth: 1.5,
     borderColor: THEME.gold,

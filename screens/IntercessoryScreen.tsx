@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -10,114 +10,52 @@ import {
   Modal,
   Animated,
 } from 'react-native';
-
-const THEME = {
-  bg: '#0A0C14',
-  card: '#111420',
-  cardBorder: '#1E2438',
-  gold: '#C9A96E',
-  goldLight: '#E8C98A',
-  text: '#EEE8DC',
-  textMuted: '#7A7F96',
-  textSub: '#AAA5B8',
-  purple: '#6B5BCD',
-  green: '#4A9B6F',
-  rose: '#C0647A',
-};
+import { THEME } from '../constants/theme';
+import { INITIAL_POSTS, type PrayerPost } from '../services/intercessory';
 
 const CATEGORIES = ['전체', '건강', '진로', '가족', '믿음', '감사', '나라/세계'];
 
-type PrayerPost = {
-  id: string;
-  author: string;
-  category: string;
-  title: string;
-  content: string;
-  prayerCount: number;
-  hasPrayed: boolean;
-  timeAgo: string;
-  emoji: string;
-};
-
-const SAMPLE_POSTS: PrayerPost[] = [
-  {
-    id: '1',
-    author: '은혜 집사',
-    category: '건강',
-    title: '어머니의 수술을 위해 기도 부탁드립니다',
-    content: '다음 주 월요일 어머니의 무릎 수술이 있습니다. 하나님께서 의사 선생님의 손을 붙드시고 무사히 수술이 잘 이루어지도록, 그리고 빠른 회복을 위해 기도 부탁드립니다 🙏',
-    prayerCount: 47,
-    hasPrayed: false,
-    timeAgo: '2시간 전',
-    emoji: '💊',
-  },
-  {
-    id: '2',
-    author: '소망 집사',
-    category: '진로',
-    title: '취업 준비 중입니다 — 하나님의 인도하심을',
-    content: '반년 째 취업 준비 중입니다. 낙담이 될 때도 있지만 주님께서 예비해 두신 곳이 있을 것을 믿고 나아갑니다. 기도로 함께해 주세요.',
-    prayerCount: 82,
-    hasPrayed: true,
-    timeAgo: '5시간 전',
-    emoji: '🧭',
-  },
-  {
-    id: '3',
-    author: '감사한 형제',
-    category: '감사',
-    title: '아들이 건강하게 태어났습니다! 🎉',
-    content: '많은 분들이 함께 기도해 주셔서 3.5kg 건강한 아들이 태어났습니다. 하나님께 감사와 영광을 돌립니다! 함께 기도해 주신 모든 분들께 감사드립니다 ❤️',
-    prayerCount: 134,
-    hasPrayed: false,
-    timeAgo: '1일 전',
-    emoji: '🎉',
-  },
-  {
-    id: '4',
-    author: '믿음 권사',
-    category: '가족',
-    title: '남편의 회심을 위해 10년째 기도하고 있습니다',
-    content: '오랜 시간 남편의 구원을 위해 기도해 왔습니다. 포기하고 싶을 때도 있지만 하나님의 때가 있음을 믿습니다. 함께 기도해 주시겠어요?',
-    prayerCount: 213,
-    hasPrayed: false,
-    timeAgo: '1일 전',
-    emoji: '💍',
-  },
-  {
-    id: '5',
-    author: '선교사 박 집사',
-    category: '나라/세계',
-    title: '전쟁 지역의 형제자매들을 위해',
-    content: '분쟁 지역에서 사역하고 있습니다. 이곳의 어린이들과 피난민들을 위해, 그리고 평화를 위해 기도 부탁드립니다.',
-    prayerCount: 389,
-    hasPrayed: false,
-    timeAgo: '2일 전',
-    emoji: '🌍',
-  },
-];
-
 export default function IntercessoryScreen() {
   const [activeCategory, setActiveCategory] = useState('전체');
-  const [posts, setPosts] = useState<PrayerPost[]>(SAMPLE_POSTS);
+  const [posts, setPosts] = useState<PrayerPost[]>(INITIAL_POSTS);
   const [showNewPost, setShowNewPost] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [newContent, setNewContent] = useState('');
   const [newCategory, setNewCategory] = useState('건강');
   const [sparkles, setSparkles] = useState<{ [id: string]: boolean }>({});
+  const scaleAnims = useRef<{ [id: string]: Animated.Value }>({});
 
-  const filtered = activeCategory === '전체'
-    ? posts
-    : posts.filter(p => p.category === activeCategory);
+  const getScale = (id: string) => {
+    if (!scaleAnims.current[id]) {
+      scaleAnims.current[id] = new Animated.Value(1);
+    }
+    return scaleAnims.current[id];
+  };
+
+  const filtered =
+    activeCategory === '전체'
+      ? posts
+      : posts.filter(p => p.category === activeCategory);
 
   const handlePray = (id: string) => {
     setSparkles(prev => ({ ...prev, [id]: true }));
-    setTimeout(() => setSparkles(prev => ({ ...prev, [id]: false })), 1000);
+    setTimeout(() => setSparkles(prev => ({ ...prev, [id]: false })), 900);
+
+    const scale = getScale(id);
+    scale.setValue(1);
+    Animated.sequence([
+      Animated.spring(scale, { toValue: 1.12, friction: 4, useNativeDriver: true }),
+      Animated.spring(scale, { toValue: 1, friction: 5, useNativeDriver: true }),
+    ]).start();
 
     setPosts(prev =>
       prev.map(p =>
         p.id === id
-          ? { ...p, hasPrayed: !p.hasPrayed, prayerCount: p.hasPrayed ? p.prayerCount - 1 : p.prayerCount + 1 }
+          ? {
+              ...p,
+              hasPrayed: !p.hasPrayed,
+              prayerCount: p.hasPrayed ? p.prayerCount - 1 : p.prayerCount + 1,
+            }
           : p
       )
     );
@@ -166,7 +104,6 @@ export default function IntercessoryScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Category Tabs */}
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -189,7 +126,6 @@ export default function IntercessoryScreen() {
       <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
         {filtered.map(post => (
           <View key={post.id} style={styles.card}>
-            {/* Card Header */}
             <View style={styles.cardHeader}>
               <View style={styles.authorRow}>
                 <View style={styles.avatar}>
@@ -200,40 +136,44 @@ export default function IntercessoryScreen() {
                   <Text style={styles.timeAgo}>{post.timeAgo}</Text>
                 </View>
               </View>
-              <View style={[styles.catBadge, { backgroundColor: `${getCategoryColor(post.category)}20` }]}>
+              <View
+                style={[styles.catBadge, { backgroundColor: `${getCategoryColor(post.category)}20` }]}
+              >
                 <Text style={[styles.catBadgeText, { color: getCategoryColor(post.category) }]}>
                   {post.category}
                 </Text>
               </View>
             </View>
 
-            {/* Title & Content */}
             <Text style={styles.cardTitle}>{post.title}</Text>
-            <Text style={styles.cardContent} numberOfLines={3}>{post.content}</Text>
+            <Text style={styles.cardContent} numberOfLines={3}>
+              {post.content}
+            </Text>
 
-            {/* Footer */}
             <View style={styles.cardFooter}>
-              <TouchableOpacity
-                style={[styles.prayBtn, post.hasPrayed && styles.prayBtnActive]}
-                onPress={() => handlePray(post.id)}
-              >
-                <Text style={styles.prayBtnEmoji}>
-                  {sparkles[post.id] ? '✨' : post.hasPrayed ? '💛' : '🙏'}
-                </Text>
-                <Text style={[styles.prayBtnText, post.hasPrayed && styles.prayBtnTextActive]}>
-                  {post.hasPrayed ? '함께 기도중' : '함께 기도하기'}
-                </Text>
-                <Text style={[styles.prayCount, post.hasPrayed && styles.prayCountActive]}>
-                  {post.prayerCount}
-                </Text>
-              </TouchableOpacity>
+              <Animated.View style={{ transform: [{ scale: getScale(post.id) }] }}>
+                <TouchableOpacity
+                  style={[styles.prayBtn, post.hasPrayed && styles.prayBtnActive]}
+                  onPress={() => handlePray(post.id)}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.prayBtnEmoji}>
+                    {sparkles[post.id] ? '✨' : post.hasPrayed ? '💛' : '🙏'}
+                  </Text>
+                  <Text style={[styles.prayBtnText, post.hasPrayed && styles.prayBtnTextActive]}>
+                    함께 기도했습니다
+                  </Text>
+                  <Text style={[styles.prayCount, post.hasPrayed && styles.prayCountActive]}>
+                    {post.prayerCount}
+                  </Text>
+                </TouchableOpacity>
+              </Animated.View>
             </View>
           </View>
         ))}
         <View style={{ height: 20 }} />
       </ScrollView>
 
-      {/* New Post Modal */}
       <Modal visible={showNewPost} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -253,7 +193,12 @@ export default function IntercessoryScreen() {
                     style={[styles.filterChip, newCategory === cat && styles.filterChipActive]}
                     onPress={() => setNewCategory(cat)}
                   >
-                    <Text style={[styles.filterChipText, newCategory === cat && styles.filterChipTextActive]}>
+                    <Text
+                      style={[
+                        styles.filterChipText,
+                        newCategory === cat && styles.filterChipTextActive,
+                      ]}
+                    >
                       {cat}
                     </Text>
                   </TouchableOpacity>
@@ -263,17 +208,16 @@ export default function IntercessoryScreen() {
 
             <Text style={styles.label}>제목</Text>
             <TextInput
-              style={styles.input}
+              style={[styles.input, { color: THEME.text }]}
               placeholder="기도 제목을 입력해 주세요"
               placeholderTextColor={THEME.textMuted}
               value={newTitle}
               onChangeText={setNewTitle}
-              color={THEME.text}
             />
 
             <Text style={styles.label}>내용</Text>
             <TextInput
-              style={[styles.input, styles.inputMulti]}
+              style={[styles.input, styles.inputMulti, { color: THEME.text }]}
               placeholder="함께 기도해 주실 형제자매들에게 상황을 나눠주세요..."
               placeholderTextColor={THEME.textMuted}
               value={newContent}
@@ -281,7 +225,6 @@ export default function IntercessoryScreen() {
               multiline
               numberOfLines={5}
               textAlignVertical="top"
-              color={THEME.text}
             />
 
             <TouchableOpacity
@@ -395,7 +338,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(201, 169, 110, 0.4)',
   },
   prayBtnEmoji: { fontSize: 16 },
-  prayBtnText: { fontSize: 13, color: THEME.textMuted, fontWeight: '500' },
+  prayBtnText: { fontSize: 13, color: THEME.textMuted, fontWeight: '600' },
   prayBtnTextActive: { color: THEME.gold },
   prayCount: {
     fontSize: 13,

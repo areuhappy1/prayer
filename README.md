@@ -1,89 +1,73 @@
-# Grace — 크리스천 기도 앱 🙏
+# Grace — 크리스천 기도 앱
 
 말씀 묵상 · 개인화 기도문 · 중보기도 커뮤니티를 하나의 앱에서.
-
----
 
 ## 폴더 구조
 
 ```
-GraceApp/
-├── App.tsx                    # 메인 앱 (탭 네비게이션)
-├── package.json
-└── screens/
-    ├── BibleScreen.tsx        # 오늘의 말씀 + AI 해석
-    ├── PrayerScreen.tsx       # 기도문 생성 (AI + 과금)
-    └── IntercessoryScreen.tsx # 중보기도 커뮤니티
+├── App.tsx
+├── app.json
+├── server/index.mjs          # Anthropic API 프록시 (로컬/배포)
+├── constants/theme.ts
+├── services/
+│   ├── api.ts                # EXPO_PUBLIC_API_URL 로 프록시 호출
+│   ├── storage.ts            # AsyncStorage (무료 1회, 기도 일기, 구독 플래그)
+│   ├── purchases.ts          # RevenueCat(선택) + 개발용 폴백
+│   └── intercessory.ts       # 중보 피드 샘플 데이터 (추후 API 교체)
+├── screens/
+│   ├── HomeScreen.tsx        # saju-kid 스타일 홈 · 서비스 카드
+│   ├── BibleScreen.tsx
+│   ├── PrayerScreen.tsx
+│   └── IntercessoryScreen.tsx
+└── types/
 ```
-
----
 
 ## 설치 및 실행
 
 ```bash
-# 1. 패키지 설치
 npm install
-
-# 2. Expo 개발 서버 시작
-npx expo start
-
-# 3. 실제 기기 또는 시뮬레이터에서 실행
-# - iOS: i 키 (시뮬레이터) 또는 Expo Go 앱으로 QR 스캔
-# - Android: a 키 (에뮬레이터) 또는 Expo Go 앱으로 QR 스캔
 ```
 
----
+### 1) Anthropic 프록시 서버
 
-## API 키 설정
+앱은 **클라이언트에 API 키를 넣지 않습니다.** 루트에 `.env`를 만들고 서버 전용 키를 설정합니다.
 
-AI 기능(말씀 해석, 기도문 생성)을 위해 Anthropic API 키가 필요합니다.
+```env
+ANTHROPIC_API_KEY=sk-ant-...
+PORT=3001
+```
 
-**보안 주의**: 실제 배포 시에는 API 키를 서버(백엔드)에 두고 클라이언트에서 직접 호출하지 마세요.
+```bash
+npm run server
+```
 
-현재는 프로토타입용으로 직접 호출 구조로 되어 있습니다.
-프로덕션에서는 `/api/interpret`, `/api/generate-prayer` 등 자체 서버 API를 두고,
-서버에서 Anthropic API를 호출하는 구조를 권장합니다.
+### 2) 앱 환경 변수
 
----
+`.env` (Expo가 `EXPO_PUBLIC_*` 로 주입):
+
+```env
+EXPO_PUBLIC_API_URL=http://localhost:3001
+# Android 에뮬레이터에서 PC 로컬호스트: http://10.0.2.2:3001
+# 선택: RevenueCat 공개 키 (네이티브 빌드)
+# EXPO_PUBLIC_REVENUECAT_API_KEY=
+# 선택: 이용약관 URL
+# EXPO_PUBLIC_TERMS_URL=https://your-domain.com/terms
+```
+
+```bash
+npx expo start
+```
 
 ## 주요 기능
 
-### 📖 오늘의 말씀 (BibleScreen)
-- 날짜별 성경 말씀 자동 표시
-- 나의 상황 입력 → Claude AI가 개인화 해석 제공
+- **홈**: 배너 + 서비스 카드, 헌금 안내 문구
+- **오늘의 말씀**: 날짜 시드 기준 오늘 구절, 무드 칩, 상황별 AI 해석
+- **기도문**: 무드·대상·톤·시간대 반영, JSON 구조 응답(말씀 인용 + 기도), 1회 무료·구독 페이월, 기도 일기, TTS, 텍스트/이미지 공유·앨범 저장
+- **중보기도방**: 카테고리 탭, 카드 피드, 「함께 기도했습니다」 버튼·카운트·애니메이션
+- **구독**: `react-native-purchases` + 개발 시 `__DEV__` 에서 구매 버튼 폴백(자세한 내용은 `services/purchases.ts`)
 
-### 🙏 기도문 생성 (PrayerScreen)
-- 감정/무드 선택 (불안, 감사, 간구 등)
-- 기도 대상 설정 (나, 자녀, 가족, 중보)
-- 기도 톤 선택 (전통적 / 현대적)
-- AI 기도문 자동 생성
-- **1회 무료, 이후 구독 과금**
-- 구독료의 30%는 미자립 개척교회 및 선교지 헌금
-- 기도 일기 저장 + 응답 체크 기능
-- TTS(듣기) 버튼 (구현 예정)
+## 검증
 
-### 💞 중보기도방 (IntercessoryScreen)
-- 카테고리별 기도 제목 카드 피드
-- "함께 기도하기" 버튼 (클릭 시 카운트 증가 + 애니메이션)
-- 카테고리 필터링 (건강, 진로, 가족 등)
-- 기도 제목 직접 올리기 모달
-
----
-
-## 디자인 콘셉트
-
-- **다크 테마**: 새벽 기도, 밤 묵상에 적합한 딥 네이비/차콜 계열
-- **골드 포인트**: 성스럽고 따뜻한 느낌의 골드 (#C9A96E)
-- **카드 UI**: 각 콘텐츠를 독립된 카드로 표현, 높은 가독성
-
----
-
-## 향후 개발 로드맵
-
-- [ ] 실제 결제 연동 (IAP - In-App Purchase)
-- [ ] TTS 기도문 읽기 (expo-speech)
-- [ ] 기도문 이미지 공유 카드 생성
-- [ ] 푸시 알림 (아침 말씀, 저녁 기도 알림)
-- [ ] 소셜 로그인 (카카오, 구글)
-- [ ] 중보기도 댓글 / 격려 메시지 기능
-- [ ] 기도 응답 간증 게시판
+```bash
+npx tsc --noEmit
+```
