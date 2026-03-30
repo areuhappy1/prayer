@@ -1,0 +1,579 @@
+import React, { useState, useEffect } from 'react';
+import { Flame, TreePine, Leaf, Sparkles, Home, Heart, Moon, Star, Wind, MessageCircle, Send, CheckCircle2, PenTool, X, Info } from 'lucide-react';
+
+export default function App() {
+  const [activeTab, setActiveTab] = useState('feed');
+  const [lightPoints, setLightPoints] = useState(140);
+  const [activeCommentId, setActiveCommentId] = useState(null);
+  const [commentText, setCommentText] = useState('');
+  
+  // 상태 변수들
+  const [selectedCategory, setSelectedCategory] = useState('전체');
+  const [impactStats, setImpactStats] = useState({ warmed: 12, messages: 5, thanks: 2 });
+  const [toastMsg, setToastMsg] = useState(null);
+  
+  // 글쓰기 관련 상태
+  const [isWritingMode, setIsWritingMode] = useState(false);
+  const [writeForm, setWriteForm] = useState({ category: '진로/취업', text: '', tags: [] });
+  const [dynamicPrompt, setDynamicPrompt] = useState(null);
+  
+  const categories = ['전체', '진로/취업', '건강/심리', '인간관계', '가족/신앙'];
+  const writeCategories = ['진로/취업', '건강/심리', '인간관계', '가족/신앙'];
+  const emotionTags = ['#막막함', '#간절함', '#위로가_필요해', '#용기주세요', '#슬픔', '#불안함'];
+  
+  const [feedItems, setFeedItems] = useState([
+    {
+      id: 1,
+      category: '진로/취업',
+      color: 'text-blue-300',
+      bgColor: 'bg-blue-900/30',
+      glow: 'shadow-blue-500/20',
+      text: '28살 취업준비생입니다. 벌써 1년 반째 취업을 준비하고 있는데, 오늘 또 최종 면접에서 탈락했다는 통보를 받았습니다. 부모님 뵐 면목도 없고, 제 자신이 쓸모없는 사람처럼 느껴져 오늘 밤은 버티기가 너무 힘드네요. 저의 길을 찾을 수 있도록 기도해주세요.',
+      warmthCount: 128,
+      isWarmed: false,
+      messages: [
+        { id: 1, text: '분명 예비하신 딱 맞는 자리가 기다리고 있을 거예요. 긴 밤이 무사히 지나가길 함께 기도합니다.' }
+      ]
+    },
+    {
+      id: 2,
+      category: '건강/심리',
+      color: 'text-emerald-300',
+      bgColor: 'bg-emerald-900/30',
+      glow: 'shadow-emerald-500/20',
+      text: '아버지가 오늘 새벽 갑작스럽게 쓰러지셔서 중환자실에 들어가셨습니다. 제가 해드릴 수 있는 게 밖에서 마음 졸이며 기도하는 것밖에 없어서 너무 무력하고 두렵습니다. 저희 아버지가 무사히 고비를 넘기실 수 있도록, 한 마음으로 중보해주세요.',
+      warmthCount: 342,
+      isWarmed: true,
+      messages: []
+    },
+    {
+      id: 3,
+      category: '인간관계',
+      color: 'text-purple-300',
+      bgColor: 'bg-purple-900/30',
+      glow: 'shadow-purple-500/20',
+      text: '가장 믿었던 친구와 사소한 오해로 크게 다투고 몇 달째 연락을 안 하고 있습니다. 매일 밤 그 친구 생각이 나고 괴롭지만, 제가 먼저 다가가기엔 상처받을까 봐 겁이 납니다. 먼저 손 내밀 수 있는 용기를 얻고 싶어요.',
+      warmthCount: 56,
+      isWarmed: false,
+      messages: []
+    }
+  ]);
+
+  const showToast = (msg) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(null), 3000);
+  };
+
+  const submitNewPost = () => {
+    if (writeForm.text.length < 20) {
+      showToast("조금만 더 구체적으로 적어주세요!");
+      return;
+    }
+    
+    const newPost = {
+      id: Date.now(),
+      category: writeForm.category,
+      color: 'text-amber-300',
+      bgColor: 'bg-amber-900/30',
+      glow: 'shadow-amber-500/20',
+      text: writeForm.text,
+      warmthCount: 0,
+      isWarmed: false,
+      messages: [],
+      tags: writeForm.tags
+    };
+    
+    setFeedItems([newPost, ...feedItems]);
+    setIsWritingMode(false);
+    setWriteForm({ category: '진로/취업', text: '', tags: [] });
+    setLightPoints(prev => prev + 50); 
+    showToast("기도 제목을 나누었습니다 🙏 (+50 기도의 불씨)");
+  };
+
+  const handleTagToggle = (tag) => {
+    setWriteForm(prev => ({
+      ...prev,
+      tags: prev.tags.includes(tag) 
+        ? prev.tags.filter(t => t !== tag) 
+        : [...prev.tags, tag].slice(0, 3) 
+    }));
+  };
+
+  useEffect(() => {
+    const text = writeForm.text;
+    const trimmedText = text.trim();
+
+    if (trimmedText.length < 2) {
+      setDynamicPrompt(null);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      const isBackground = /(는데|은데|한데|ㄴ데)\s*$/.test(trimmedText); 
+      const isOpposite = /(지만|어도|건만)\s*$/.test(trimmedText); 
+      const isReason = /(아서|어서|해서|니까|으니)\s*$/.test(trimmedText); 
+      const isAnd = /(고|며|,)\s*$/.test(trimmedText); 
+
+      if (isBackground) {
+        setDynamicPrompt("그런 상황이셨군요. 그 순간 마음이 어떠셨나요?");
+      } else if (isOpposite) {
+        setDynamicPrompt("그럼에도 불구하고 어떤 생각이 가장 많이 드셨나요?");
+      } else if (isReason) {
+        setDynamicPrompt("그렇게 느끼신 이후에 어떤 일이나 생각이 이어졌나요?");
+      } else if (isAnd) {
+        setDynamicPrompt("조금 더 이어서 말씀해 주시겠어요?");
+      } else if (text.includes('헤어') || text.includes('이별') || text.includes('헤어짐')) {
+        setDynamicPrompt("상실감이 크시겠어요. 지금 가장 필요한 위로나 기도는 무엇인가요?");
+      } else if (text.includes('취업') || text.includes('면접') || text.includes('퇴사') || text.includes('탈락')) {
+        setDynamicPrompt("그 과정에서 가장 막막하거나 지치게 했던 점은 무엇이었나요?");
+      } else if (text.includes('힘들') || text.includes('우울') || text.includes('지쳐') || text.includes('눈물') || text.includes('기도')) {
+        setDynamicPrompt("오늘 하루 중, 어떤 순간이 가장 버티기 힘드셨나요?");
+      } else if (text.includes('친구') || text.includes('싸웠') || text.includes('사람') || text.includes('가족')) {
+        setDynamicPrompt("그 분과의 관계가 어떻게 회복되기를 가장 바라시나요?");
+      } else if (trimmedText.length > 50 && /[.?!]\s*$/.test(trimmedText)) {
+        setDynamicPrompt("잘 적어주셨어요. 더 내려놓고 싶은 마음이 있다면 계속 적어주셔도 좋아요.");
+      } else if (trimmedText.length < 30) {
+        setDynamicPrompt("어떤 마음의 짐을 안고 계신지 조금만 더 들려주시겠어요?");
+      }
+    }, 600);
+
+    return () => clearTimeout(timer);
+  }, [writeForm.text]);
+
+  const handleWarmth = (id) => {
+    const item = feedItems.find(i => i.id === id);
+    if (!item) return;
+
+    const isNowWarmed = !item.isWarmed;
+
+    setFeedItems(prev => prev.map(i => {
+      if (i.id === id) {
+        return { 
+          ...i, 
+          warmthCount: isNowWarmed ? i.warmthCount + 1 : i.warmthCount - 1, 
+          isWarmed: isNowWarmed 
+        };
+      }
+      return i;
+    }));
+
+    if (isNowWarmed) {
+      setLightPoints(prev => prev + 10);
+      setImpactStats(prev => ({ ...prev, warmed: prev.warmed + 1 }));
+      showToast("누군가를 위해 중보기도를 드렸습니다 🙏");
+    } else {
+      setLightPoints(prev => prev - 10);
+      setImpactStats(prev => ({ ...prev, warmed: prev.warmed - 1 }));
+    }
+  };
+
+  const toggleComment = (id) => {
+    if (activeCommentId === id) {
+      setActiveCommentId(null);
+    } else {
+      setActiveCommentId(id);
+      setCommentText(''); 
+    }
+  };
+
+  const submitComment = (id) => {
+    if (!commentText.trim()) return;
+    
+    setFeedItems(prev => prev.map(item => {
+      if (item.id === id) {
+        return {
+          ...item,
+          messages: [...item.messages, { id: Date.now(), text: commentText }]
+        };
+      }
+      return item;
+    }));
+    
+    setLightPoints(prev => prev + 20); 
+    setImpactStats(prev => ({ ...prev, messages: prev.messages + 1 }));
+    showToast("당신의 진심 어린 위로가 전달되었습니다 💌");
+    setCommentText('');
+  };
+
+  const getForestLevel = (points) => {
+    if (points < 50) return { name: '작은 씨앗', icon: <Leaf size={48} className="text-emerald-700" />, max: 50 };
+    if (points < 150) return { name: '초록빛 새싹', icon: <Leaf size={64} className="text-emerald-400 drop-shadow-[0_0_10px_rgba(52,211,153,0.5)]" />, max: 150 };
+    if (points < 300) return { name: '단단한 묘목', icon: <TreePine size={96} className="text-emerald-300 drop-shadow-[0_0_15px_rgba(52,211,153,0.6)]" />, max: 300 };
+    return { name: '생명나무', icon: <TreePine size={140} className="text-teal-200 drop-shadow-[0_0_25px_rgba(45,212,191,0.8)]" />, max: 600 };
+  };
+
+  const currentLevel = getForestLevel(lightPoints);
+  const progressPercent = Math.min(100, (lightPoints / currentLevel.max) * 100);
+
+  const textLength = writeForm.text.length;
+  const detailPercent = Math.min(100, (textLength / 100) * 100);
+  let detailMessage = "어떤 기도가 필요하신가요?";
+  let detailColor = "bg-slate-700";
+  
+  if (textLength > 0 && textLength < 20) {
+    detailMessage = "조금만 더 자세히 적어주세요.";
+    detailColor = "bg-rose-500";
+  } else if (textLength >= 20 && textLength < 60) {
+    detailMessage = "좋아요, 마음이 잘 전달되고 있어요.";
+    detailColor = "bg-amber-500";
+  } else if (textLength >= 60) {
+    detailMessage = "충분히 구체적이에요! 많은 분들이 함께 기도할 거예요.";
+    detailColor = "bg-emerald-500";
+  }
+
+  return (
+    <div className="flex justify-center bg-gray-950 min-h-screen font-sans text-slate-200">
+      <div className="w-full max-w-md bg-slate-950 shadow-2xl relative overflow-hidden flex flex-col h-screen">
+        
+        {/* Background Effects */}
+        <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none">
+          <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[30%] bg-emerald-900/20 blur-[100px] rounded-full"></div>
+          <div className="absolute bottom-[-10%] right-[-10%] w-[60%] h-[40%] bg-teal-900/10 blur-[120px] rounded-full"></div>
+        </div>
+
+        {/* Header */}
+        <header className="px-6 py-5 flex justify-between items-center z-10 border-b border-slate-800/50 bg-slate-950/80 backdrop-blur-md">
+          <div className="flex items-center gap-2">
+            <Moon className="text-emerald-400" size={24} />
+            <h1 className="text-xl font-bold text-slate-100 tracking-wider">기도실</h1>
+          </div>
+          <div className="flex items-center gap-1.5 bg-slate-800/80 px-3 py-1.5 rounded-full border border-slate-700/50">
+            <Sparkles className="text-yellow-400" size={16} />
+            <span className="text-sm font-semibold text-yellow-100">{lightPoints}</span>
+          </div>
+        </header>
+
+        {/* Toast Notification */}
+        {toastMsg && (
+          <div className="absolute top-20 left-1/2 transform -translate-x-1/2 z-50 animate-in fade-in slide-in-from-top-4 duration-300">
+            <div className="bg-emerald-900/90 border border-emerald-500/50 text-emerald-100 px-4 py-2.5 rounded-full shadow-[0_0_20px_rgba(5,150,105,0.4)] flex items-center gap-2 text-sm font-medium whitespace-nowrap backdrop-blur-md">
+              <CheckCircle2 size={16} className="text-emerald-400" />
+              {toastMsg}
+            </div>
+          </div>
+        )}
+
+        {/* Main Content Area */}
+        <main className="flex-1 overflow-y-auto pb-24 z-10 custom-scrollbar relative">
+          
+          {activeTab === 'feed' && (
+            <div className="p-4 space-y-4">
+              
+              {/* 메인 화면 자아효능감 대시보드 (Immediate Efficacy) - 최상단 고정 및 디자인 강조 */}
+              <div className="bg-gradient-to-br from-emerald-900/60 to-slate-900/90 border border-emerald-500/40 rounded-3xl p-5 shadow-[0_0_20px_rgba(5,150,105,0.15)] backdrop-blur-md mb-4 relative overflow-hidden">
+                {/* 은은한 배경 이펙트 */}
+                <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/10 rounded-full blur-2xl"></div>
+                
+                <div className="flex items-center gap-2 mb-4">
+                  <Heart size={18} className="text-rose-400" />
+                  <h3 className="text-sm font-semibold text-emerald-50">나를 통해 전해진 온기</h3>
+                </div>
+                
+                <div className="flex justify-between items-center px-2">
+                  <div className="flex flex-col items-center">
+                    <span className="text-3xl font-bold text-slate-100">{impactStats.warmed}</span>
+                    <span className="text-xs text-slate-400 mt-1 font-medium">함께한 기도</span>
+                  </div>
+                  <div className="w-px h-10 bg-slate-700/50"></div>
+                  <div className="flex flex-col items-center">
+                    <span className="text-3xl font-bold text-slate-100">{impactStats.messages}</span>
+                    <span className="text-xs text-slate-400 mt-1 font-medium">남긴 위로</span>
+                  </div>
+                  <div className="w-px h-10 bg-slate-700/50"></div>
+                  <div className="flex flex-col items-center">
+                    <span className="text-3xl font-bold text-rose-300">{impactStats.thanks}</span>
+                    <span className="text-xs text-slate-400 mt-1 font-medium">받은 감사</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="px-2 pb-2">
+                <h2 className="text-xl font-semibold text-slate-100 mb-1">오늘의 기도 제목</h2>
+                <p className="text-slate-400 text-sm">누군가를 위해 중보의 불꽃을 켜주세요.</p>
+              </div>
+
+              <div className="flex gap-2 overflow-x-auto pb-2 px-2 custom-scrollbar">
+                {categories.map(cat => (
+                  <button
+                    key={cat}
+                    onClick={() => setSelectedCategory(cat)}
+                    className={`whitespace-nowrap px-4 py-1.5 rounded-full text-sm font-medium transition-all ${
+                      selectedCategory === cat 
+                        ? 'bg-emerald-600 text-white shadow-[0_0_10px_rgba(5,150,105,0.3)]' 
+                        : 'bg-slate-800/60 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    {cat}
+                  </button>
+                ))}
+              </div>
+
+              {feedItems.filter(item => selectedCategory === '전체' || item.category === selectedCategory).map(item => (
+                <div key={item.id} className={`p-5 rounded-3xl border border-slate-800/60 shadow-lg backdrop-blur-sm transition-all duration-300 ${item.bgColor} ${item.isWarmed ? `shadow-[0_0_20px_rgba(255,255,255,0.05)] border-slate-700` : ''}`}>
+                  <div className="flex justify-between items-start mb-3">
+                    <span className={`text-xs font-medium px-2.5 py-1 rounded-md bg-slate-900/50 border border-slate-700/50 ${item.color}`}>
+                      {item.category}
+                    </span>
+                    <span className="text-slate-500 text-xs flex items-center gap-1">
+                      <Wind size={12} /> 2시간 전
+                    </span>
+                  </div>
+                  
+                  <p className="text-slate-200 text-sm leading-relaxed mb-6 font-medium">
+                    "{item.text}"
+                  </p>
+                  
+                  <div className="flex justify-between items-center pt-3 border-t border-slate-800/50">
+                    <div className="flex items-center gap-4 text-slate-400">
+                      <div className="flex items-center gap-1.5" title="중보 기도 수">
+                        <Flame size={18} className={item.isWarmed ? 'text-amber-400 drop-shadow-[0_0_8px_rgba(251,191,36,0.8)]' : ''} />
+                        <span className={`text-sm font-semibold ${item.isWarmed ? 'text-amber-100' : ''}`}>
+                          {item.warmthCount}명의 중보
+                        </span>
+                      </div>
+                      
+                      <button 
+                        onClick={() => toggleComment(item.id)}
+                        className={`flex items-center gap-1.5 transition-colors hover:text-slate-200 ${activeCommentId === item.id ? 'text-emerald-400' : ''}`}
+                        title="위로의 말 남기기"
+                      >
+                        <MessageCircle size={18} />
+                        <span className="text-sm font-semibold">{item.messages.length}</span>
+                      </button>
+                    </div>
+                    
+                    <button 
+                      onClick={() => handleWarmth(item.id)}
+                      className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-semibold transition-all duration-300 ${
+                        item.isWarmed 
+                          ? 'bg-slate-800 text-amber-400 border border-amber-500/30' 
+                          : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-[0_0_15px_rgba(5,150,105,0.4)]'
+                      }`}
+                    >
+                      {item.isWarmed ? '기도했습니다' : '함께 기도하기'}
+                    </button>
+                  </div>
+
+                  {activeCommentId === item.id && (
+                    <div className="mt-4 pt-4 border-t border-slate-800/50 animate-in slide-in-from-top-2 duration-300">
+                      {item.messages.length > 0 && (
+                        <div className="space-y-2 mb-3 max-h-40 overflow-y-auto custom-scrollbar pr-1 flex flex-col items-start">
+                          {item.messages.map(msg => (
+                            <div key={msg.id} className="bg-slate-900/60 px-3 py-2.5 rounded-2xl rounded-tl-sm text-sm text-slate-300 border border-slate-800/50 inline-block max-w-[90%]">
+                              {msg.text}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="flex gap-2 items-end">
+                        <textarea
+                          value={commentText}
+                          onChange={(e) => setCommentText(e.target.value)}
+                          placeholder="위로나 성경 말씀을 남겨주세요..."
+                          className="flex-1 bg-slate-900 border border-slate-700 rounded-2xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-emerald-500/50 transition-colors resize-none h-11 min-h-[44px]"
+                          rows={1}
+                        />
+                        <button 
+                          onClick={() => submitComment(item.id)}
+                          disabled={!commentText.trim()}
+                          className="bg-emerald-600 p-2.5 rounded-xl text-white hover:bg-emerald-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-[0_0_15px_rgba(5,150,105,0.2)]"
+                        >
+                          <Send size={18} className="translate-x-[1px] translate-y-[1px]" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {activeTab === 'forest' && (
+            <div className="p-6 flex flex-col items-center h-full justify-center space-y-8 animate-in fade-in duration-500">
+              
+              <div className="text-center space-y-2">
+                <h2 className="text-2xl font-bold text-slate-100">나의 기도의 숲</h2>
+                <p className="text-slate-400 text-sm">타인을 향한 중보가 모여 생명나무를 이룹니다.</p>
+              </div>
+
+              <div className="relative w-64 h-64 flex items-center justify-center bg-slate-900/50 rounded-full border border-slate-800 shadow-[inset_0_0_40px_rgba(0,0,0,0.5)]">
+                <div className="absolute w-32 h-32 bg-emerald-500/20 blur-2xl rounded-full"></div>
+                <div className="z-10 transition-all duration-700 ease-in-out transform hover:scale-105 cursor-pointer flex flex-col items-center">
+                  {currentLevel.icon}
+                  {lightPoints >= 150 && (
+                    <>
+                      <Star className="absolute top-8 left-8 text-yellow-200/60 animate-pulse" size={12} />
+                      <Star className="absolute top-12 right-10 text-emerald-200/50 animate-pulse delay-75" size={16} />
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="w-full bg-slate-900/80 p-5 rounded-3xl border border-slate-800/80 backdrop-blur-md">
+                <div className="flex justify-between items-end mb-3">
+                  <div>
+                    <p className="text-xs text-slate-400 mb-1">현재 등급</p>
+                    <p className="text-lg font-bold text-emerald-300">{currentLevel.name}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs text-slate-400 mb-1">모은 기도의 불씨</p>
+                    <p className="text-lg font-bold text-yellow-300 flex items-center justify-end gap-1">
+                      <Sparkles size={16} /> {lightPoints}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="w-full h-3 bg-slate-800 rounded-full overflow-hidden mt-4 relative">
+                  <div 
+                    className="h-full bg-gradient-to-r from-emerald-600 to-teal-400 rounded-full transition-all duration-1000 relative"
+                    style={{ width: `${progressPercent}%` }}
+                  >
+                    <div className="absolute top-0 right-0 w-4 h-full bg-white/30 blur-[2px]"></div>
+                  </div>
+                </div>
+                <p className="text-xs text-center text-slate-500 mt-3">
+                  다음 성장까지 {currentLevel.max - lightPoints}개의 기도가 필요해요
+                </p>
+              </div>
+
+            </div>
+          )}
+
+        </main>
+
+        {activeTab === 'feed' && !isWritingMode && (
+          <button 
+            onClick={() => setIsWritingMode(true)}
+            className="absolute bottom-24 right-6 bg-emerald-600 p-4 rounded-full shadow-[0_0_20px_rgba(5,150,105,0.4)] text-white hover:bg-emerald-500 hover:scale-105 transition-all duration-300 z-30"
+          >
+            <PenTool size={24} />
+          </button>
+        )}
+
+        {isWritingMode && (
+          <div className="absolute inset-0 bg-slate-950/95 backdrop-blur-xl z-50 flex flex-col animate-in slide-in-from-bottom-full duration-300">
+            <div className="flex justify-between items-center p-5 border-b border-slate-800/50">
+              <button onClick={() => setIsWritingMode(false)} className="text-slate-400 hover:text-white">
+                <X size={24} />
+              </button>
+              <h2 className="text-lg font-bold text-slate-100">기도 제목 나누기</h2>
+              <button 
+                onClick={submitNewPost}
+                disabled={textLength < 20}
+                className="text-emerald-400 font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                올리기
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
+              <div>
+                <label className="text-sm text-slate-400 block mb-3 font-medium">1. 어떤 주제의 기도 제목인가요?</label>
+                <div className="flex flex-wrap gap-2">
+                  {writeCategories.map(cat => (
+                    <button
+                      key={cat}
+                      onClick={() => setWriteForm({...writeForm, category: cat})}
+                      className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+                        writeForm.category === cat 
+                          ? 'bg-emerald-600 text-white' 
+                          : 'bg-slate-800 text-slate-300 border border-slate-700'
+                      }`}
+                    >
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm text-slate-400 block mb-3 font-medium">2. 지금 감정은 어떠신가요? (최대 3개)</label>
+                <div className="flex flex-wrap gap-2">
+                  {emotionTags.map(tag => (
+                    <button
+                      key={tag}
+                      onClick={() => handleTagToggle(tag)}
+                      className={`px-3 py-1.5 rounded-lg text-xs transition-all ${
+                        writeForm.tags.includes(tag)
+                          ? 'bg-amber-500/20 text-amber-300 border border-amber-500/50'
+                          : 'bg-slate-800/50 text-slate-400 border border-slate-700/50'
+                      }`}
+                    >
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm text-slate-400 block mb-3 font-medium">3. 고민을 들려주세요.</label>
+                
+                {dynamicPrompt && (
+                  <div key={dynamicPrompt} className="mb-3 animate-in fade-in slide-in-from-bottom-2 duration-500">
+                    <div className="bg-emerald-900/40 border border-emerald-500/30 rounded-2xl rounded-bl-sm p-3 inline-block shadow-[0_4px_15px_rgba(5,150,105,0.1)]">
+                      <p className="text-sm text-emerald-200 flex items-center gap-2 font-medium">
+                        <Sparkles size={16} className="text-emerald-400 flex-shrink-0" />
+                        <span className="leading-snug">{dynamicPrompt}</span>
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                <div className="relative">
+                  <textarea
+                    value={writeForm.text}
+                    onChange={(e) => setWriteForm({...writeForm, text: e.target.value})}
+                    placeholder={`예) 28살 취업준비생입니다. 오늘 또 면접에서 탈락 통보를 받았는데... \n\n나이, 현재 상황, 가장 힘든 점을 자세히 적어주실수록 다른 분들이 깊이 공감하고 중보할 수 있어요.`}
+                    className="w-full h-48 bg-slate-900/50 border border-slate-700 rounded-2xl p-4 text-slate-200 focus:outline-none focus:border-emerald-500 resize-none leading-relaxed"
+                  />
+                  
+                  <div className="absolute bottom-0 left-0 w-full p-4 bg-slate-900/80 backdrop-blur-sm rounded-b-2xl border-t border-slate-800">
+                    <div className="flex justify-between items-center mb-2">
+                      <span className={`text-xs font-medium flex items-center gap-1.5 ${textLength >= 60 ? 'text-emerald-400' : 'text-slate-400'}`}>
+                        <Info size={14} /> {detailMessage}
+                      </span>
+                      <span className="text-xs text-slate-500">{textLength}자</span>
+                    </div>
+                    <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                      <div 
+                        className={`h-full transition-all duration-300 ${detailColor}`}
+                        style={{ width: `${detailPercent}%` }}
+                      ></div>
+                    </div>
+                  </div>
+                </div>
+                
+                <p className="text-center text-xs text-emerald-400/80 mt-4 flex items-center justify-center gap-1">
+                  <Sparkles size={14} /> 구체적으로 털어놓으면 50 기도의 불씨를 얻어요!
+                </p>
+              </div>
+
+            </div>
+          </div>
+        )}
+
+        <nav className="absolute bottom-0 w-full bg-slate-950/90 backdrop-blur-xl border-t border-slate-800/50 pb-safe z-20">
+          <div className="flex justify-around items-center p-2">
+            <button 
+              onClick={() => setActiveTab('feed')}
+              className={`flex flex-col items-center p-3 rounded-2xl w-24 transition-all duration-300 ${activeTab === 'feed' ? 'bg-slate-800/60 text-emerald-400' : 'text-slate-500 hover:text-slate-300'}`}
+            >
+              <Home size={24} className={activeTab === 'feed' ? 'drop-shadow-[0_0_8px_rgba(52,211,153,0.5)]' : ''} />
+              <span className="text-[10px] font-medium mt-1">기도실</span>
+            </button>
+            
+            <button 
+              onClick={() => setActiveTab('forest')}
+              className={`flex flex-col items-center p-3 rounded-2xl w-24 transition-all duration-300 ${activeTab === 'forest' ? 'bg-slate-800/60 text-emerald-400' : 'text-slate-500 hover:text-slate-300'}`}
+            >
+              <TreePine size={24} className={activeTab === 'forest' ? 'drop-shadow-[0_0_8px_rgba(52,211,153,0.5)]' : ''} />
+              <span className="text-[10px] font-medium mt-1">기도의 숲</span>
+            </button>
+          </div>
+        </nav>
+
+      </div>
+    </div>
+  );
+}
